@@ -19,7 +19,7 @@ N_RESULTS  = 5
 MODEL      = "claude-sonnet-4-20250514"
 
 SYSTEM_PROMPT = """You are a research assistant specializing in CNN's Larry King Live.
-You have access to a large archive of Larry King Live transcripts spanning many years.
+You have access to the entire archive of Larry King Live transcripts spanning many years.
 
 When answering questions:
 - Draw on the transcript excerpts provided to give accurate, specific answers
@@ -28,6 +28,7 @@ When answering questions:
 - If asked about a topic, identify patterns across multiple episodes
 - If the transcripts don't contain enough info to answer, say so honestly
 - Be conversational but thorough
+- Consider how the questions Larry asks point back to Larry's own beliefs or perspectives
 
 Always cite which episode(s) your answer draws from."""
 
@@ -88,7 +89,7 @@ def main():
     )
 
     st.title("🎙️ Larry King Live — Transcript Research Agent")
-    st.caption("Ask anything about Larry King's interviews — topics, guests, tone, themes, and more.")
+    st.caption("Ask anything about Larry King's interviews from all his years at CNN — topics, guests, tone, themes, and more.")
 
     embedder = get_embedder()
     index    = get_index()
@@ -97,17 +98,16 @@ def main():
     with st.sidebar:
         st.header("About")
         st.write(
-            "This agent searches thousands of Larry King Live transcripts "
+            "This agent searches 3,246 Larry King Live transcripts "
             "and uses Claude AI to answer your questions."
         )
         st.divider()
         st.header("Example questions")
         examples = [
-            "What did Larry ask guests about God?",
-            "How did Larry interview politicians differently than celebrities?",
-            "Which guests talked about 9/11 and what did they say?",
-            "What was Larry's tone when interviewing controversial figures?",
-            "Did Larry ever discuss the death penalty?",
+            "Which episodes and interviews touched on the meaning of life?",
+            "How did Larry relate to the legacy of children?",
+            "What are some of the interviews talking about God and what does Larry ask?",
+            "Was his approach interviewing women seemingly different than men?",
         ]
         for i, ex in enumerate(examples):
             if st.button(ex, key=f"ex_{i}", use_container_width=True):
