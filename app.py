@@ -3,27 +3,20 @@
 app.py
 ------
 Streamlit chat interface for querying Larry King Live transcripts.
-Uses ChromaDB for retrieval and Claude (Anthropic) for answering.
-Downloads the chroma index from Hugging Face on first load.
+Uses Pinecone for retrieval and Claude (Anthropic) for answering.
 """
 
 import os
 import anthropic
-import chromadb
 import streamlit as st
-from chromadb.utils import embedding_functions
-from huggingface_hub import hf_hub_download
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-HF_REPO    = "alloriginaltone/larry-king-chroma"  # Hugging Face dataset
-CHROMA_DIR = "/tmp/chroma_db"                      # temp folder on Streamlit Cloud
+INDEX_NAME = "larry-king-transcripts"
 N_RESULTS  = 5
 MODEL      = "claude-sonnet-4-20250514"
-
-EMBEDDING_FN = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
 
 SYSTEM_PROMPT = """You are a research assistant specializing in CNN's Larry King Live.
 You have access to a large archive of Larry King Live transcripts spanning many years.
@@ -41,25 +34,18 @@ Always cite which episode(s) your answer draws from."""
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 @st.cache_resource
-def get_collection():
-    """Download chroma index from Hugging Face if needed, then load it."""
-    db_file = os.path.join(CHROMA_DIR, "chroma.sqlite3")
-    if not os.path.exists(db_file):
-        st.info("Downloading transcript index... this may take a minute on first load.")
-        os.makedirs(CHROMA_DIR, exist_ok=True)
-        hf_token = st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
-        hf_hub_download(
-            repo_id=HF_REPO,
-            filename="chroma.sqlite3",
-            repo_type="dataset",
-            token=hf_token,
-            local_dir=CHROMA_DIR,
-        )
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return client.get_collection(
-        name="larry_king_transcripts",
-        embedding_function=EMBEDDING_FN,
-    )
+def get_embedder():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+@st.cache_resource
+def get_index():
+    api_key = st.secrets.get("PINECONE_API_KEY") or os.environ.get("PINECONE_API_KEY")
+    if not api_key:
+        st.error("No PINECONE_API_KEY found. Add it to your Streamlit secrets.")
+        st.stop()
+    pc = Pinecone(api_key=api_key)
+    return pc.Index(INDEX_NAME)
 
 
 @st.cache_resource
@@ -73,18 +59,22 @@ def get_claude():
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
-def retrieve(query: str, collection, n: int = N_RESULTS) -> tuple[str, list[dict]]:
-    """Search the vector DB and return formatted context + source metadata."""
-    results = collection.query(query_texts=[query], n_results=n)
-    docs      = results["documents"][0]
-    metadatas = results["metadatas"][0]
+def retrieve(query: str, index, embedder, n: int = N_RESULTS) -> tuple[str, list[dict]]:
+    """Embed query, search Pinecone, return context and sources."""
+    query_vector = embedder.encode(query).tolist()
+    results = index.query(vector=query_vector, top_k=n, include_metadata=True)
+
     context_parts = []
     sources       = []
-    for doc, meta in zip(docs, metadatas):
+
+    for match in results["matches"]:
+        meta = match["metadata"]
+        text = meta.get("text", "")
         context_parts.append(
-            f"[Episode: {meta.get('title','?')} | Date: {meta.get('date','?')}]\n{doc}"
+            f"[Episode: {meta.get('title','?')} | Date: {meta.get('date','?')}]\n{text}"
         )
         sources.append(meta)
+
     return "\n\n---\n\n".join(context_parts), sources
 
 
@@ -100,8 +90,9 @@ def main():
     st.title("🎙️ Larry King Live — Transcript Research Agent")
     st.caption("Ask anything about Larry King's interviews — topics, guests, tone, themes, and more.")
 
-    collection = get_collection()
-    claude     = get_claude()
+    embedder = get_embedder()
+    index    = get_index()
+    claude   = get_claude()
 
     with st.sidebar:
         st.header("About")
@@ -109,7 +100,6 @@ def main():
             "This agent searches thousands of Larry King Live transcripts "
             "and uses Claude AI to answer your questions."
         )
-        st.metric("Transcript chunks indexed", f"{collection.count():,}")
         st.divider()
         st.header("Example questions")
         examples = [
@@ -119,8 +109,8 @@ def main():
             "What was Larry's tone when interviewing controversial figures?",
             "Did Larry ever discuss the death penalty?",
         ]
-        for ex in examples:
-            if st.button(ex, key=f"ex_{examples.index(ex)}", use_container_width=True):
+        for i, ex in enumerate(examples):
+            if st.button(ex, key=f"ex_{i}", use_container_width=True):
                 st.session_state.pending_question = ex
 
     if "messages" not in st.session_state:
@@ -146,7 +136,7 @@ def main():
             st.markdown(user_input)
 
         with st.spinner("Searching transcripts..."):
-            context, sources = retrieve(user_input, collection)
+            context, sources = retrieve(user_input, index, embedder)
 
         user_prompt = (
             f"Here are relevant excerpts from the Larry King Live transcripts:\n\n"
