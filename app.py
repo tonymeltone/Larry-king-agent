@@ -4,11 +4,7 @@ app.py
 ------
 Streamlit chat interface for querying Larry King Live transcripts.
 Uses ChromaDB for retrieval and Claude (Anthropic) for answering.
- 
-Run locally:
-    streamlit run app.py
- 
-Or deploy to Streamlit Cloud (set ANTHROPIC_API_KEY in Streamlit secrets).
+Downloads the chroma index from Hugging Face on first load.
 """
  
 import os
@@ -16,12 +12,14 @@ import anthropic
 import chromadb
 import streamlit as st
 from chromadb.utils import embedding_functions
+from huggingface_hub import hf_hub_download
  
 # ── Configuration ─────────────────────────────────────────────────────────────
  
-CHROMA_DIR   = r"E:\LarryKing\Transcripts\chroma_db"
-N_RESULTS    = 5                  # number of transcript chunks to retrieve
-MODEL        = "claude-sonnet-4-20250514"
+HF_REPO    = "alloriginaltone/larry-king-chroma"  # Hugging Face dataset
+CHROMA_DIR = "/tmp/chroma_db"                      # temp folder on Streamlit Cloud
+N_RESULTS  = 5
+MODEL      = "claude-sonnet-4-20250514"
  
 EMBEDDING_FN = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"
@@ -44,6 +42,19 @@ Always cite which episode(s) your answer draws from."""
  
 @st.cache_resource
 def get_collection():
+    """Download chroma index from Hugging Face if needed, then load it."""
+    db_file = os.path.join(CHROMA_DIR, "chroma.sqlite3")
+    if not os.path.exists(db_file):
+        st.info("Downloading transcript index... this may take a minute on first load.")
+        os.makedirs(CHROMA_DIR, exist_ok=True)
+        hf_token = st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+        hf_hub_download(
+            repo_id=HF_REPO,
+            filename="chroma.sqlite3",
+            repo_type="dataset",
+            token=hf_token,
+            local_dir=CHROMA_DIR,
+        )
     client = chromadb.PersistentClient(path=CHROMA_DIR)
     return client.get_collection(
         name="larry_king_transcripts",
@@ -55,7 +66,7 @@ def get_collection():
 def get_claude():
     api_key = st.secrets.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        st.error("No ANTHROPIC_API_KEY found. Add it to your Streamlit secrets or environment.")
+        st.error("No ANTHROPIC_API_KEY found. Add it to your Streamlit secrets.")
         st.stop()
     return anthropic.Anthropic(api_key=api_key)
  
@@ -65,19 +76,15 @@ def get_claude():
 def retrieve(query: str, collection, n: int = N_RESULTS) -> tuple[str, list[dict]]:
     """Search the vector DB and return formatted context + source metadata."""
     results = collection.query(query_texts=[query], n_results=n)
- 
     docs      = results["documents"][0]
     metadatas = results["metadatas"][0]
- 
     context_parts = []
     sources       = []
- 
     for doc, meta in zip(docs, metadatas):
         context_parts.append(
             f"[Episode: {meta.get('title','?')} | Date: {meta.get('date','?')}]\n{doc}"
         )
         sources.append(meta)
- 
     return "\n\n---\n\n".join(context_parts), sources
  
  
@@ -91,15 +98,11 @@ def main():
     )
  
     st.title("🎙️ Larry King Live — Transcript Research Agent")
-    st.caption(
-        "Ask anything about Larry King's interviews — topics, guests, tone, themes, and more."
-    )
+    st.caption("Ask anything about Larry King's interviews — topics, guests, tone, themes, and more.")
  
-    # Load resources
     collection = get_collection()
     claude     = get_claude()
  
-    # Sidebar info
     with st.sidebar:
         st.header("About")
         st.write(
@@ -120,7 +123,6 @@ def main():
             if st.button(ex, use_container_width=True):
                 st.session_state.pending_question = ex
  
-    # Chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
  
@@ -135,46 +137,34 @@ def main():
                             f"[View transcript]({s.get('url', '#')})"
                         )
  
-    # Handle sidebar example button clicks
-    pending = st.session_state.pop("pending_question", None)
- 
-    # Chat input
+    pending    = st.session_state.pop("pending_question", None)
     user_input = st.chat_input("Ask a question about the Larry King Live transcripts...") or pending
  
     if user_input:
-        # Show user message
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.markdown(user_input)
  
-        # Retrieve relevant transcript chunks
         with st.spinner("Searching transcripts..."):
             context, sources = retrieve(user_input, collection)
  
-        # Build prompt
         user_prompt = (
             f"Here are relevant excerpts from the Larry King Live transcripts:\n\n"
-            f"{context}\n\n"
-            f"---\n\n"
-            f"User question: {user_input}"
+            f"{context}\n\n---\n\nUser question: {user_input}"
         )
  
-        # Call Claude
         with st.chat_message("assistant"):
             with st.spinner("Claude is thinking..."):
                 response = claude.messages.create(
                     model=MODEL,
                     max_tokens=1024,
                     system=SYSTEM_PROMPT,
-                    messages=[
-                        {"role": "user", "content": user_prompt}
-                    ],
+                    messages=[{"role": "user", "content": user_prompt}],
                 )
                 answer = response.content[0].text
  
             st.markdown(answer)
  
-            # Show sources
             with st.expander(f"📄 Sources ({len(sources)} transcript excerpts)"):
                 seen = set()
                 for s in sources:
@@ -187,7 +177,6 @@ def main():
                         f"[View on CNN Transcripts]({s.get('url', '#')})"
                     )
  
-        # Save assistant message
         st.session_state.messages.append({
             "role":    "assistant",
             "content": answer,
@@ -196,4 +185,5 @@ def main():
  
  
 if __name__ == "__main__":
+    main()
     main()
