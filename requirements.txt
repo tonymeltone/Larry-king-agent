@@ -1,5 +1,4 @@
 anthropic
-chromadb
+pinecone
 streamlit
 sentence-transformers
-huggingface_hub
