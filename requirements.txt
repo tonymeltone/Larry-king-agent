@@ -1,0 +1,4 @@
+anthropic
+chromadb
+streamlit
+sentence-transformers
