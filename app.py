@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 
 INDEX_NAME = "larry-king-transcripts"
 N_RESULTS  = 5
-MODEL      = "claude-sonnet-4-20250514"
+MODEL      = "claude-sonnet-5"
 
 SYSTEM_PROMPT = """You are a research assistant specializing in CNN's Larry King Live.
 You have access to the entire archive of Larry King Live transcripts spanning many years.
